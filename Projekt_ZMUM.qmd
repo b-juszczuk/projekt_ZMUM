@@ -1,0 +1,480 @@
+---
+title: "Przewidywanie kursów wymiany walut na podstawie kursu euro "
+author: "Brygida Juszczuk"
+format: 
+  html:
+    lang: pl                 # Ustawia język dokumentu na polski
+    theme: united            # Ustawia motyw wizualny dokumentu na "united"
+    self-contained: true     # Tworzy dokument samodzielny, bez zależności od zewnętrznych plików
+    author-title: Autor      # Ustawia tytuł sekcji autora na "Autor"
+    toc: true                # Włącza spis treści
+    toc-title: Spis treści   # Ustawia tytuł spisu treści na "Spis treści"
+    toc-location: left       # Ustawia lokalizację spisu treści na lewą stronę
+    warning: false           # Wyłącza wyświetlanie ostrzeżeń w dokumencie
+    message: false           # Wyłącza wyświetlanie komunikatów w dokumencie
+    echo: false              # Wyłącza wyświetlanie kodu źródłowego w dokumencie
+---
+
+## Cel projektu
+
+Celem projektu jest opracowanie modelu uczenia maszynowego, który będzie w stanie przewidzieć przyszłe kursy wymiany walut na podstawie historycznych danych dotyczących kursu euro względem innych walut.
+
+## Opis zbioru
+
+Zbiór danych „***euro-daily-hist_1999_2022***” pochodzi ze strony [kaggle.com](https://www.kaggle.com/datasets/lsind18/euro-exchange-daily-rates-19992020). Zbiór danych zawiera historyczne kursy wymiany euro na 40 różnych walut. Dane obejmują okres od 4 stycznia 1999 roku do 11 kwietnia 2024 roku. Każdy wiersz reprezentuje kursy walut z danego dnia, a każda kolumna zawiera kurs euro względem jednej z walut.
+
+Kolumny:
+
+-   `Australian dollar` - dolar australijski,
+
+-   `Bulgarian lev` - lew bułgarski,
+
+-   `Brazilian real` - real brazylijski,
+
+-   `Canadian dollar` - dolar kanadyjski,
+
+-   `Swiss franc` - frank szwajcarski.
+
+-   `Chinese yuan renminbi` - juan chiński (renminbi),
+
+-   `Cypriot pound` - funt cypryjski,
+
+-   `Czech koruna` - korona czeska,
+
+-   `Danish krone` - korona duńska,
+
+-   `Estonian kroon` - korona estońska,
+
+-   `UK pound sterling` - funt szterling,
+
+-   `brytyjski Greek drachma` - drachma grecka,
+
+-   `Hong Kong dollar` - dolar hongkoński,
+
+-   `Croatian kuna` - kuna chorwacka,
+
+-   `Hungarian forint` - forint węgierski,
+
+-   `Indonesian rupiah` - rupia indonezyjska,
+
+-   `Israeli shekel` - szekel izraelski,
+
+-   `Indian rupee` - rupia indyjska,
+
+-   `Iceland krona` - korona islandzka,
+
+-   `Japanese yen` - jen japoński,
+
+-   `Korean won` - won południowokoreański,
+
+-   `Lithuanian litas` - lit litewski,
+
+-   `Latvian lats` - łat łotewski,
+
+-   `Maltese lira` - lira maltańska,
+
+-   `Mexican peso` - peso meksykańskie,
+
+-   `Malaysian ringgit` - ringgit malezyjski,
+
+-   `Norwegian krone` - korona norweska,
+
+-   `New Zealand dollar` - dolar nowozelandzki,
+
+-   `Philippine peso` - peso filipińskie,
+
+-   `Polish zloty` - złoty polski,
+
+-   `Romanian leu` - lej rumuński,
+
+-   `Russian rouble` - rubel rosyjski,
+
+-   `Swedish krona` - korona szwedzka,
+
+-   `Singapore dollar` - dolar singapurski,
+
+-   `Slovenian tolar` - tolar słoweński,
+
+-   `Slovak koruna` - korona słowacka,
+
+-   `Thai baht` - baht tajski,
+
+-   `Turkish lira` - lira turecka,
+
+-   `US dollar` - dolar amerykański,
+
+-   `South African rand` - rand południowoafrykański.
+
+```{r}
+#Paczki
+library(dplyr)
+library(keras)
+library(tensorflow)
+```
+
+```{r}
+library(rio)
+Dataset <- import("euro-daily-hist_1999_2022.csv")
+#w konsoli reticulate::use_condaenv(condaenv ="base")
+```
+
+```{r}
+Dataset <- Dataset[-c(3,4,5,6,7,8,11,12,13,15,16,17,18,19,20,23,24,25,28,29,32,33,34,36,37,38,39,41)]
+colSums(is.na(Dataset))
+```
+
+```{r}
+Dataset <- Dataset %>% rename(Data ="Period\\Unit:")
+names(Dataset) <- gsub("\\[|\\]", "", names(Dataset))
+```
+
+
+```{r}
+Dataset_clean <- Dataset[-c(3059,3075,3076,3150,3325,3326,3600,3601,3666,3671,3841,3855,3856,3927,3931,3932,4102,4130,4131,4186,4193,4194,4364,4380,4381,4454,4455,4625,4635,4636,4715,4910,4911,5160,5161,5232,5236,5237,5415,5416), ]
+
+```
+
+```{r}
+Dataset_clean[] <- lapply(Dataset_clean, function(x) {
+  if (is.character(x)) as.numeric(as.character(x)) else x
+})
+```
+
+```{r}
+Dataset_clean<- Dataset_clean %>% filter_all(all_vars(!is.na(.)))
+colSums(is.na(Dataset_clean))
+#write.csv(Dataset, file = "C:\\Users\\Dell\\Desktop\\studia_IAD\\Zaawansowane metody uczenia maszynowego\\projekt_ZMUM\\date.csv", row.names = FALSE)
+```
+
+Podczas czyszczenia danych usunięto 18 walut, ponieważ występowały w nich znaczące braki wynikające głównie z faktu, że te waluty przestały być obowiązujące. Dodatkowo, wyeliminowano 63 wiersze z uwagi na brak notowań cen walut w określonych dniach.
+
+Resampling
+
+```{r}
+library(dplyr)
+library(zoo) 
+library(magrittr)
+
+Dataset_clean$Data %<>%
+ as.POSIXct(tz = "Etc/GMT+1", format = "%Y-%m-%d")
+
+# Pełny zakres dat
+full_dates <- seq(min(Dataset_clean$Data), max(Dataset_clean$Data), by = "day")
+
+# Tworzenie pełnej siatki dat
+full_grid <- data.frame(Data = full_dates)
+
+# Dołączenie pełnej siatki z danymi i uzupełnianie brakujących wartości
+data_full <- full_grid %>%
+  left_join(data, by = "Data") %>%
+  arrange(Data) %>%
+    mutate(across(starts_with("Value_"), ~ zoo::na.approx(., na.rm = FALSE))) # Interpolacja brakujących wartości dla każdej kolumny
+
+```
+
+## Podstawowe statystyki zbioru
+
+Na początku sprawdźmy podstawowe statystyki dla zmiennych numerycznych
+
+```{r}
+library(knitr)
+library(kableExtra)
+library(dplyr)
+
+selected_columns <- Dataset_clean %>% select(-1)
+
+summary_stats <- selected_columns %>%
+  apply(2, summary) %>%
+  rbind(St.dev = apply(selected_columns, 2, sd)) %>%
+  round(2)
+
+# Przypisanie nazw do wierszy
+rownames(summary_stats) <- c('minimum', 'kwantyl dolny', 'mediana', 'średnia', 'kwantyl górny', 'maksimum', 'odchylenie standardowe')
+
+# Prezentacja tabeli
+summary_stats %>%
+  kable() %>%
+  kable_styling(bootstrap_options = "responsive") %>%
+  column_spec(1, bold = TRUE)
+```
+
+```{r}
+plot(`Australian dollar ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Canadian dollar ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Swiss franc ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Czech koruna ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Danish krone ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`UK pound sterling ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Hong Kong dollar ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Hungarian forint ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Indonesian rupiah ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Japanese yen ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Korean won ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Mexican peso ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Malaysian ringgit ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Norwegian krone ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`New Zealand dollar ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Philippine peso ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+```{r}
+plot(`Polish zloty ` ~ `Data` , data = Dataset_clean, pch = 20, cex = .3)
+```
+
+
+### Macierz korelacji
+
+Struktura zależności liniowej przedstawiona zostanie w postaci macierzy korelacji.
+
+```{r}
+library(ggcorrplot)
+Correlation_Variables_numeric <- Dataset_clean %>%
+  select_if(is.numeric)
+
+Correlation_matrix_numeric <- round(cor(Correlation_Variables_numeric, method = "spearman"), 2)
+p.mat_coefficient <- cor_pmat(Correlation_Variables_numeric)
+
+ggcorrplot(Correlation_matrix_numeric, lab = TRUE, p.mat = p.mat_coefficient)
+```
+
+## Modelowanie 
+
+```{r}
+num_train_samples <- round(nrow(Dataset_clean) * .5)
+num_val_samples <- round(nrow(Dataset_clean) * 0.25)
+num_test_samples <- nrow(Dataset_clean) - num_train_samples - num_val_samples
+
+train_df <- Dataset_clean[seq(num_train_samples), ]
+
+val_df <- Dataset_clean[seq(from = nrow(train_df) + 1,
+                      length.out = num_val_samples), ]
+
+test_df <- Dataset_clean[seq(to = nrow(Dataset_clean),
+                       length.out = num_test_samples), ]
+
+#cat("num_train_samples:", nrow(train_df), "\n")
+```
+
+```{r}
+# Ustal kolumny wejściowe (z walutami)
+input_data_colnames <- names(Dataset_clean) %>%
+  setdiff(c("Data"))
+
+# Normalizacja danych
+normalization_values <- zip_lists(mean = lapply(train_df[input_data_colnames], mean),
+                                  sd = lapply(train_df[input_data_colnames], sd))
+
+str(normalization_values)
+```
+
+```{r}
+normalize_input_data <- function(df) {
+  normalize <- function(x, center, scale) {
+    (x - center) / scale
+  }
+
+  for (col_nm in input_data_colnames) {
+    col_nv <- normalization_values[[col_nm]]
+    df[[col_nm]] <- normalize(df[[col_nm]], col_nv$mean, col_nv$sd)
+  }
+  return(df)
+}
+```
+
+```{r}
+sampling_rate <- 1
+sequence_length <- 30
+delay <- 7
+batch_size <- 256
+
+# Funkcja przygotowująca dane wejściowe i docelowe dla każdej waluty
+df_to_inputs_and_targets <- function(df) {
+  inputs <- df[input_data_colnames] %>%
+    normalize_input_data() %>%
+    as.matrix()
+
+  targets_list <- lapply(input_data_colnames, function(col) {
+    as.array(df[[col]])
+  })
+
+  list(
+    head(inputs, -delay),
+    lapply(targets_list, function(target) tail(target, -delay))
+  )
+}
+
+# Funkcja do tworzenia datasetów dla każdej waluty
+make_dataset <- function(df) {
+  c(inputs, targets_list) %<-% df_to_inputs_and_targets(df)
+
+  datasets <- lapply(seq_along(targets_list), function(i) {
+    timeseries_dataset_from_array(
+      inputs, targets_list[[i]],
+      sampling_rate = sampling_rate,
+      sequence_length = sequence_length,
+      shuffle = TRUE,
+      batch_size = batch_size
+    )
+  })
+
+  names(datasets) <- input_data_colnames
+  return(datasets)
+}
+
+# Tworzenie datasetów treningowych, walidacyjnych i testowych dla każdej waluty
+train_datasets <- make_dataset(train_df)
+val_datasets <- make_dataset(val_df)
+test_datasets <- make_dataset(test_df)
+```
+
+Modelo bazowy 
+
+```{r}
+library(keras)
+library(tfdatasets)
+
+# Funkcja do denormalizacji wartości walut
+unnormalize_currency <- function(x, currency_col) {
+  nv <- normalization_values[[currency_col]]
+  (x * nv$sd) + nv$mean
+}
+
+# Funkcja oceniająca metodę bazową dla pojedynczej waluty
+evaluate_naive_method <- function(dataset, currency) {
+  unnormalize_currency <- function(x) {
+    nv <- normalization_values[[currency]]
+    (x * nv$sd) + nv$mean
+  }
+
+  currency_col_idx <- match(currency, input_data_colnames)
+
+  reduction <- dataset %>%
+    dataset_unbatch() %>%
+    dataset_map(function(samples, target) {
+      last_currency_in_input <- samples[-1, currency_col_idx]
+      pred <- unnormalize_currency(last_currency_in_input)
+      abs(pred - target)
+    }) %>%
+    dataset_reduce(
+      initial_state = list(total_samples_seen = 0L,
+                           total_abs_error = 0),
+      reduce_func = function(state, element) {
+        state$total_samples_seen %<>% `+`(1L)
+        state$total_abs_error %<>% `+`(element)
+        state
+      }
+    ) %>%
+    lapply(as.numeric)
+
+  mae <- with(reduction, total_abs_error / total_samples_seen)
+  mae
+}
+
+# Wywołanie funkcji oceniającej metodę bazową dla każdej waluty
+for (currency in input_data_colnames) {
+  mae <- evaluate_naive_method(val_datasets[[currency]], currency)
+  cat(sprintf("Validation MAE for %s: %.4f\n", currency, mae))
+}
+
+```
+
+```{r}
+for (currency in input_data_colnames) {
+  mae <- evaluate_naive_method(test_datasets[[currency]], currency)
+  cat(sprintf("Test MAE for %s: %.4f\n", currency, mae))
+}
+```
+
+```{r}
+for (currency in input_data_colnames) {
+  mae <- evaluate_naive_method(train_datasets[[currency]], currency)
+  cat(sprintf("Train MAE for %s: %.4f\n", currency, mae))
+}
+```
+
+
+```{r}
+# Liczba kolumn w danych wejściowych
+ncol_input_data <- length(input_data_colnames)
+
+input_shape <- c(10)
+
+# Definicja warstw modelu funkcjonalnego
+inputs <- layer_input(shape = c(10), dtype = 'float32', name = "input_1")
+x <- layer_dense(inputs, units = 64, activation = 'relu', name = "dense_1")
+outputs <- layer_dense(x, units = 1, activation = 'sigmoid', name = "dense_2")
+
+# Tworzenie modelu funkcjonalnego
+model <- keras::keras_model(inputs = inputs, outputs = outputs)
+
+# Kompilacja modelu
+model %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "mse",
+  metrics = c("mae")
+)
+
+# Trenowanie modelu
+history <- model %>%
+  fit(
+    train_dataset,
+    epochs = 10,
+    validation_data = val_dataset
+  )
+# Zapisanie modelu i historii
+save_model_tf(model, "models/jena_dense.keras")
+saveRDS(history, "models/jena_dense_history.rds")
+
+# Ładowanie modelu
+model <- load_model_tf("models/jena_dense.keras")
+
+# Ewaluacja modelu na danych testowych
+test_metrics <- evaluate(model, test_dataset)
+sprintf("Test MAE: %.2f", test_metrics["mae"])
+```
+
